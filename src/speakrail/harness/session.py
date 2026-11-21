@@ -43,6 +43,7 @@ import os
 import re
 import datetime
 import time
+from contextlib import aclosing
 from dataclasses import dataclass, field
 
 from ..config import CFG                                    # noqa: E402
@@ -53,6 +54,7 @@ from .backchannel import is_backchannel, normalize           # noqa: E402
 from .cascade import Session, Turn                           # noqa: E402
 from .tts import Segment, strip_tags           # noqa: E402
 from .tools import CAT, DEFAULT_CITY, LOCAL_TOOLS, RESET_TOOL, RESET_TOOL_SPEC, STATEFUL_TOOLS, ToolBox   # noqa: E402
+from . import ollama_reply
 from .llm_engine import Engine                                # noqa: E402
 from .claude_tool import CLAUDE_TOOL, CLAUDE_TOOL_SPEC, ClaudeTasks   # noqa: E402
 from .frontier_tool import FRONTIER_TOOL, FrontierTasks   # noqa: E402
@@ -123,6 +125,8 @@ class MicroCfg:
     unduck_ms: float = 400           # ... back to full volume after this much silence from the user
     safety_yield_s: float = 1.5      # overlap: the model keeps <listen>ing while the user has said this much non-backchannel
                                      # speech over us -> the harness yields (0 = off; never on an interrupt)
+    reply_model: str = ""            # Ollama model for spoken replies, if set
+    ollama_url: str = "http://127.0.0.1:11434"
     reply_max_tokens: int = 450      # about 2 min of speech (shorter caps cut stories mid-sentence)
     tool_rounds: int = 4
     first_clause_chars: int = 3
@@ -992,7 +996,7 @@ class MicroSession(Session):
                 R = Reply(P.DECISION_NAME[P.SPEAK], self.hub.new_utt(self), Turn(-1), held=True)
                 R.ctx_snapshot = ("fork", snap_fork)
                 sp.reply = R                                      # a discard while deciding kills it
-                R.task = asyncio.ensure_future(self._generate(R, list(gen_fork.ids)))
+                R.task = asyncio.ensure_future(self._generate(R, self._reply_prompt(gen_fork)))
             dec, rec = await self._decide_ids(sp.fork.ids, "idle")
             if sp.dead:
                 return
@@ -1011,7 +1015,7 @@ class MicroSession(Session):
                     R = Reply(P.DECISION_NAME[dec], self.hub.new_utt(self), Turn(-1), held=True)   # scratch turn until promoted
                     R.ctx_snapshot = ("fork", snap_fork)
                     sp.reply = R
-                    R.task = asyncio.ensure_future(self._generate(R, list(sp.fork.ids)))
+                    R.task = asyncio.ensure_future(self._generate(R, self._reply_prompt(sp.fork)))
             if sp.promote_at is not None and (not sp.early or sp.confirmed):
                 t, frame_ms = sp.promote_at
                 if not self._spec_promote(t):
@@ -1090,7 +1094,7 @@ class MicroSession(Session):
         R = Reply(kind, self.hub.new_utt(self), tr)
         R.ctx_snapshot = snap
         self._adopt_reply(R)
-        R.task = asyncio.ensure_future(self._generate(R, list(self.ctx.ids)))
+        R.task = asyncio.ensure_future(self._generate(R, self._reply_prompt(self.ctx)))
 
     def _adopt_reply(self, R: Reply):
         """R becomes the live reply: UI, playback bookkeeping; a held (speculative) reply releases what it buffered"""
@@ -1111,43 +1115,18 @@ class MicroSession(Session):
             if R.gen_done: self._maybe_finished(R)
         self._line(f"    ASSISTANT {R.kind} starts (utt {R.utt})")
 
-    async def _generate(self, R: Reply, prompt: list[int]):
+    def _reply_prompt(self, ctx):
+        if self.m.reply_model:
+            return ollama_reply.messages(ctx, self.system)
+        return list(ctx.ids)
+
+    async def _generate(self, R: Reply, prompt):
         R.turn.t_llm_sent = time.monotonic()
         try:
-            for rnd in range(self.m.tool_rounds + 1):
-                raw = ""; spoken_upto = 0; cut = -1
-                st = self.llm.stream(self.http, prompt, self.m.reply_max_tokens, [P.SPEAK, TOOL_RESPONSE_OPEN],
-                                     {int(k): v for k, v in BANNED_IN_REPLY.items()})
-                async for d in st:
-                    if R.turn.t_first_token is None: R.turn.t_first_token = time.monotonic()
-                    R.turn.n_tokens += 1
-                    raw += d
-                    cut = raw.find("<|tool_call>")
-                    safe = len(raw) if cut < 0 else cut
-                    tail = raw[max(spoken_upto, safe - 12):safe]      # a "<|tool" still streaming stays back
-                    if cut < 0 and "<" in tail:
-                        safe = max(spoken_upto, safe - (len(tail) - tail.rfind("<")))
-                    if safe > spoken_upto:
-                        self._speak_text(R, raw[spoken_upto:safe]); spoken_upto = safe
-                stop = st.stop
-                calls = list(CALL_RE.finditer(raw))              # every call in this generation (Gemma may emit several)
-                if cut < 0 and spoken_upto < len(raw):
-                    self._speak_text(R, raw[spoken_upto:]); spoken_upto = len(raw)
-                self._flush(R, final=True)
-                R.raw += " "                                        # the next round's text starts a new word
-                if stop == TOOL_RESPONSE_OPEN and calls and rnd < self.m.tool_rounds:
-                    if rnd == 0 and self.m.tool_hold_ms > 0: await self._tool_hold(R)
-                    results = ""
-                    for k, m in enumerate(calls):                # run them in order; one response block per call, as
-                        name = m.group(1); args = self._parse_args(m.group(2)) or {}     # Gemma's template renders them
-                        result = await self._run_tool(R, name, args)
-                        R.units.append(("tool", name, args, result))
-                        results += P.tool_result_text(name, result, opened=(k == 0))
-                    if R.held: R.held_deltas.append(" ")                # the subtitle's text resumes as a new word
-                    else: self.send({"type": "reply_delta", "turn": R.turn.id, "text": " "})
-                    prompt = prompt + P.encode(raw[:calls[-1].end()] + "<|tool_response>") + P.encode(results)
-                    continue
-                break
+            if self.m.reply_model:
+                await self._generate_ollama(R, prompt)
+            else:
+                await self._generate_gemma(R, prompt)
             tr = R.turn
             tr.t_llm_done = time.monotonic()
             R.gen_done = True
@@ -1165,6 +1144,81 @@ class MicroSession(Session):
             self.send({"type": "error", "where": "reply", "detail": repr(e)})
             R.gen_done = True
             self._maybe_finished(R)
+
+    async def _generate_gemma(self, R: Reply, prompt):
+        for rnd in range(self.m.tool_rounds + 1):
+            raw = ""; spoken_upto = 0; cut = -1
+            st = self.llm.stream(self.http, prompt, self.m.reply_max_tokens, [P.SPEAK, TOOL_RESPONSE_OPEN],
+                                 {int(k): v for k, v in BANNED_IN_REPLY.items()})
+            async for d in st:
+                if R.turn.t_first_token is None: R.turn.t_first_token = time.monotonic()
+                R.turn.n_tokens += 1
+                raw += d
+                cut = raw.find("<|tool_call>")
+                safe = len(raw) if cut < 0 else cut
+                tail = raw[max(spoken_upto, safe - 12):safe]      # a "<|tool" still streaming stays back
+                if cut < 0 and "<" in tail:
+                    safe = max(spoken_upto, safe - (len(tail) - tail.rfind("<")))
+                if safe > spoken_upto:
+                    self._speak_text(R, raw[spoken_upto:safe]); spoken_upto = safe
+            stop = st.stop
+            calls = list(CALL_RE.finditer(raw))              # every call in this generation (Gemma may emit several)
+            if cut < 0 and spoken_upto < len(raw):
+                self._speak_text(R, raw[spoken_upto:]); spoken_upto = len(raw)
+            self._flush(R, final=True)
+            R.raw += " "                                        # the next round's text starts a new word
+            if stop == TOOL_RESPONSE_OPEN and calls and rnd < self.m.tool_rounds:
+                if rnd == 0 and self.m.tool_hold_ms > 0: await self._tool_hold(R)
+                results = ""
+                for k, m in enumerate(calls):                # run them in order; one response block per call, as
+                    name = m.group(1); args = self._parse_args(m.group(2)) or {}     # Gemma's template renders them
+                    result = await self._run_tool(R, name, args)
+                    R.units.append(("tool", name, args, result))
+                    results += P.tool_result_text(name, result, opened=(k == 0))
+                if R.held: R.held_deltas.append(" ")                # the subtitle's text resumes as a new word
+                else: self.send({"type": "reply_delta", "turn": R.turn.id, "text": " "})
+                prompt = prompt + P.encode(raw[:calls[-1].end()] + "<|tool_response>") + P.encode(results)
+                continue
+            break
+
+    async def _generate_ollama(self, R: Reply, messages):
+        for rnd in range(self.m.tool_rounds + 1):
+            tools = self.decls if rnd < self.m.tool_rounds else []
+            parts, calls = [], []
+            chunks = ollama_reply.stream(self.http, self.m.ollama_url, self.m.reply_model, messages, tools,
+                                        self.m.reply_max_tokens)
+            async with aclosing(chunks):
+                async for chunk in chunks:
+                    message = chunk.get("message") or {}
+                    if text := message.get("content"):
+                        if R.turn.t_first_token is None:
+                            R.turn.t_first_token = time.monotonic()
+                        parts.append(text)
+                        self._speak_text(R, text)
+                    calls.extend(message.get("tool_calls") or [])
+                    R.turn.n_tokens += chunk.get("eval_count") or 0
+            self._flush(R, final=True)
+            if not calls or not tools:
+                break
+
+            declared = {tool["function"]["name"] for tool in tools}
+            messages.append({"role": "assistant", "content": "".join(parts), "tool_calls": calls})
+            # A speculative answer can be discarded. Wait for adoption before it invokes any tool.
+            while R.held:
+                await asyncio.sleep(0.02)
+            if rnd == 0 and self.m.tool_hold_ms > 0:
+                await self._tool_hold(R)
+            for call in calls:
+                fn = call["function"]
+                name, args = fn["name"], fn.get("arguments") or {}
+                if name in declared and isinstance(args, dict):
+                    result = await self._run_tool(R, name, args)
+                    R.units.append(("tool", name, args, result))
+                else:
+                    result = {"error": "invalid or unavailable tool"}
+                messages.append({"role": "tool", "tool_name": name, "content": json.dumps(result, ensure_ascii=False)})
+            if parts and not R.raw[-1:].isspace():
+                self._speak_text(R, " ")
 
     def _speak_text(self, R: Reply, text: str):
         """spoken text as it streams: words into the reply's units, deltas to the UI, clauses to TTS"""

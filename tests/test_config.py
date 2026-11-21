@@ -14,6 +14,7 @@ from speakrail.config import Config, ENV, load, REPO_ROOT, TUNED
 def test_defaults_match_the_old_code():
     c = load({})
     expected = dict(asr_url="ws://127.0.0.1:8765/v1/transcribe", llm_url="http://127.0.0.1:8001/v1/completions", llm_lora="speakrail",
+                    reply_model="", ollama_url="http://127.0.0.1:11434",
                     llm_base_model="speakrail-base", tts_engine="breeze", tts_url="", tts_model="pocket-tts", breeze_int8="backbone,text_encoder,depth",
                     home=str(Path.home() / ".speakrail"), models_dir="", engines_path="", tokenizer_dir=str(ROOT / "models/speakrail-gemma/tokenizer"), phrase_cache_dir=str(ROOT / "run/phrase_cache"), sessions_dir="",
                     ui_host="127.0.0.1", ui_port=8080, idle_offload_min=-1.0, host_url="", no_color=False, persona="nova", voice="", home_city="London", home_timezone="Europe/London",

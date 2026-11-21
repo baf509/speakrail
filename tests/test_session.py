@@ -655,6 +655,76 @@ async def scenario_ant4_old_head():
     return "ANT4 on with a 5-class head: unchanged", ok and d.s.counters["early_fired"] == 0, d
 
 
+async def scenario_ollama_reply():
+    requests = []
+    disconnected = asyncio.Event()
+
+    async def chat(request):
+        body = await request.json()
+        requests.append(body)
+        resp = web.StreamResponse(headers={"Content-Type": "application/x-ndjson"})
+        await resp.prepare(request)
+
+        async def send(**chunk):
+            await resp.write((json.dumps(chunk) + "\n").encode())
+
+        last = body["messages"][-1]
+        if last["role"] == "tool":
+            await send(message={"content": "I rolled the dice."})
+        elif last["content"] == "Roll two dice.":
+            await send(message={"thinking": "This should never be spoken."})
+            await send(message={"tool_calls": [{"function": {"name": "dice_roll", "arguments": {"expr": "2d6"}}}]})
+        else:
+            await send(message={"content": "Sure. Here is my answer. "})
+            # Keep generating until the user's interruption closes the HTTP response.
+            try:
+                while True:
+                    await asyncio.sleep(0.05)
+                    await send(message={"content": "More. "})
+            except ConnectionResetError:
+                disconnected.set()
+                return resp
+        await send(done=True, eval_count=10)
+        return resp
+
+    app = web.Application()
+    app.router.add_post("/api/chat", chat)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    try:
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        host, port = runner.addresses[0]
+        d = Driver(reply_model="inkling-2-mini", ollama_url=f"http://{host}:{port}", phrase_cache=False)
+        await d.start()
+        try:
+            await turn(d, "Roll", "two", peek_tail=("dice.",))
+            await asyncio.sleep(1.5)
+            await turn(d, "Tell", "me", "more.")
+            await asyncio.sleep(0.8)
+            await d.frames(3, SPEAK)
+            d.words("Wait,", "stop.")
+            await d.frames(3, SPEAK)
+            await asyncio.wait_for(disconnected.wait(), timeout=1)
+            assert all(b["model"] == "inkling-2-mini" and b["stream"] and b["think"] is False for b in requests)
+            assert requests[0]["messages"][-1] == {"role": "user", "content": "Roll two dice."}
+            assert requests[1]["messages"][-1]["tool_name"] == "dice_roll"
+            assert any(m["role"] == "assistant" and "I rolled the dice." in m["content"]
+                       for m in requests[2]["messages"])
+            assert ("complete (spec)", "speak") in d.decisions()
+            assert ("overlap", "yield") in d.decisions()
+            assert any(e["reason"] == "yield" for e in d.types("stop_audio"))
+            assert not d.types("error")
+            assert all("never be spoken" not in e["text"] for e in d.types("reply_delta"))
+        finally:
+            d.s.decider.cancel()
+            await asyncio.gather(d.s.decider, return_exceptions=True)
+            await d.s.http.close()
+    finally:
+        await runner.cleanup()
+    return "Inkling streams a reply, uses a tool and cancels on barge-in", True, d
+
+
 async def main():
     app = web.Application(); app.router.add_post("/v1/completions", completions); app.router.add_post("/v1/chat/completions", fireworks)
     runner = web.AppRunner(app); await runner.setup(); await web.TCPSite(runner, "127.0.0.1", PORT).start()
@@ -663,7 +733,7 @@ async def main():
                scenario_interrupt_stale, scenario_interrupt_hold, scenario_no_empty_pin,
                scenario_spec_live_duplicate, scenario_silence_fallback, scenario_phrase_cache, scenario_safety_net, scenario_reset, scenario_peek_twice, scenario_bc_flood, scenario_claude, scenario_frontier, scenario_spec_parallel_listen, scenario_nudge_after_listen, scenario_nudge_already_mentioned, scenario_peek_respelled,
                scenario_ant4_confirmed, scenario_ant4_replaced, scenario_ant4_confirm_skipped,
-               scenario_ant4_old_head):
+               scenario_ant4_old_head, scenario_ollama_reply):
         name, ok, d = await sc()
         results.append((name, ok))
         print(f"\n=== {name}: {'PASS' if ok else 'FAIL'}")

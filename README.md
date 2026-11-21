@@ -119,6 +119,27 @@ Settings come from environment variables, or from `--set key=value` on `speakrai
 | `FIREWORKS_API_KEY`           | empty                | enables asking a larger model for hard questions (paid)                                                               |
 | `SESSIONS_DIR`                | off                  | save every session (log, context, audio) for debugging                                                                |
 
+### Use Inkling 2 Mini for replies
+
+Install this branch of the fork:
+
+```sh
+git clone --branch inkling-replies https://github.com/baf509/speakrail.git
+cd speakrail
+sh install.sh --source "$PWD"
+```
+
+Install and start [Ollama](https://ollama.com/), then download Inkling and select it when starting Speakrail:
+
+```sh
+ollama pull inkling-2-mini
+speakrail start --set reply_model=inkling-2-mini
+```
+
+Use `--set ollama_url=http://127.0.0.1:11434` to override the Ollama server URL when needed. Speakrail sends the transcript and declared tools to this server. Gemma still controls when to speak, handles brief live interjections, and writes listening notes when enabled. Inkling streams normal and speculative replies to the existing speech engine. To use Gemma for replies, start without the `reply_model` setting.
+
+On a Mac, the two models and the speech engines share unified memory. Inkling's default Ollama package alone is about 20 GB. The integration requests a 4,096-token context window and disables thinking for spoken replies.
+
 ## Limitations
 
 - English only.

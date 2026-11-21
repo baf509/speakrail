@@ -22,6 +22,8 @@ class Config:
     llm_url: str = "http://127.0.0.1:8001/v1/completions"
     llm_lora: str = "speakrail"
     llm_base_model: str = "speakrail-base"
+    reply_model: str = ""  # empty uses the turn-taking model for replies too
+    ollama_url: str = "http://127.0.0.1:11434"
     tts_engine: str = "breeze"
     tts_url: str = ""                # "" = the engine's own default port
     tts_model: str = "pocket-tts"
@@ -91,6 +93,7 @@ TUNED = {"turn_k", "peek_frames", "tool_hold_ms", "decision_bias", "reply_temp",
 # field -> (environment variable, parser). Names and meanings are the ones the project has always used.
 ENV = {
     "asr_url": ("ASR_URL", str), "llm_url": ("LLM_URL", str), "llm_lora": ("LLM_LORA", str), "llm_base_model": ("LLM_BASE_MODEL", str),
+    "reply_model": ("REPLY_MODEL", str), "ollama_url": ("OLLAMA_URL", str),
     "tts_engine": ("TTS_ENGINE", str), "tts_url": ("TTS_URL", str), "tts_model": ("TTS_MODEL", str), "breeze_int8": ("BREEZE_INT8", str),
     "home": ("SPEAKRAIL_HOME", str), "models_dir": ("MODELS_DIR", str), "engines_path": ("SPEAKRAIL_ENGINES_PATH", str),
     "tokenizer_dir": ("SPEAKRAIL_TOKENIZER_DIR", str), "phrase_cache_dir": ("PHRASE_CACHE_DIR", str), "sessions_dir": ("SESSIONS_DIR", str),

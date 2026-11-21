@@ -60,6 +60,7 @@ def micro_cfg(q, cfg):
     return MicroCfg(url=ARGS.mt_url, lora=CFG.llm_lora,
                     tau=CFG.turn_tau, k=CFG.turn_k, bias=CFG.decision_biases,
                     reply_temp=CFG.reply_temp, reply_top_p=CFG.reply_top_p, reply_top_k=CFG.reply_top_k,
+                    reply_model=CFG.reply_model, ollama_url=CFG.ollama_url,
                     think_model=CFG.llm_base_model, undo_words=ARGS.undo_words, tool_hold_ms=CFG.tool_hold_ms,
                     persona=ARGS.persona,
                     allow_interject=not ARGS.no_interject, silence_fallback_ms=cfg.silence_ms,
