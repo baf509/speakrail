@@ -46,7 +46,7 @@ import time
 from contextlib import aclosing
 from dataclasses import dataclass, field
 
-from ..config import CFG                                    # noqa: E402
+from ..config import CFG, secret                                    # noqa: E402
 from . import protocol as P                                        # noqa: E402
 from .tokens_v1 import SIL_LADDER_S                          # noqa: E402
 
@@ -127,6 +127,8 @@ class MicroCfg:
                                      # speech over us -> the harness yields (0 = off; never on an interrupt)
     reply_model: str = ""            # Ollama model for spoken replies, if set
     ollama_url: str = "http://127.0.0.1:11434"
+    reply_chat_url: str = ""
+    reply_caller: str = ""
     reply_max_tokens: int = 450      # about 2 min of speech (shorter caps cut stories mid-sentence)
     tool_rounds: int = 4
     first_clause_chars: int = 3
@@ -1124,7 +1126,7 @@ class MicroSession(Session):
         R.turn.t_llm_sent = time.monotonic()
         try:
             if self.m.reply_model:
-                await self._generate_ollama(R, prompt)
+                await self._generate_chat(R, prompt)
             else:
                 await self._generate_gemma(R, prompt)
             tr = R.turn
@@ -1181,12 +1183,21 @@ class MicroSession(Session):
                 continue
             break
 
-    async def _generate_ollama(self, R: Reply, messages):
+    async def _generate_chat(self, R: Reply, messages):
         for rnd in range(self.m.tool_rounds + 1):
             tools = self.decls if rnd < self.m.tool_rounds else []
             parts, calls = [], []
-            chunks = ollama_reply.stream(self.http, self.m.ollama_url, self.m.reply_model, messages, tools,
-                                        self.m.reply_max_tokens)
+            if self.m.reply_chat_url:
+                headers = {}
+                if key := secret("REPLY_API_KEY"):
+                    headers["Authorization"] = f"Bearer {key}"
+                if self.m.reply_caller:
+                    headers["X-ARIA-Caller"] = self.m.reply_caller
+                chunks = ollama_reply.openai_stream(self.http, self.m.reply_chat_url, self.m.reply_model,
+                                                   messages, tools, self.m.reply_max_tokens, headers)
+            else:
+                chunks = ollama_reply.stream(self.http, self.m.ollama_url, self.m.reply_model, messages, tools,
+                                            self.m.reply_max_tokens)
             async with aclosing(chunks):
                 async for chunk in chunks:
                     message = chunk.get("message") or {}
@@ -1210,13 +1221,23 @@ class MicroSession(Session):
                 await self._tool_hold(R)
             for call in calls:
                 fn = call["function"]
-                name, args = fn["name"], fn.get("arguments") or {}
+                name, args = fn["name"], fn.get("arguments", {})
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except ValueError:
+                        args = None
                 if name in declared and isinstance(args, dict):
                     result = await self._run_tool(R, name, args)
                     R.units.append(("tool", name, args, result))
                 else:
                     result = {"error": "invalid or unavailable tool"}
-                messages.append({"role": "tool", "tool_name": name, "content": json.dumps(result, ensure_ascii=False)})
+                tool_message = {"role": "tool", "content": json.dumps(result, ensure_ascii=False)}
+                if self.m.reply_chat_url:
+                    tool_message["tool_call_id"] = call["id"]
+                else:
+                    tool_message["tool_name"] = name
+                messages.append(tool_message)
             if parts and not R.raw[-1:].isspace():
                 self._speak_text(R, " ")
 

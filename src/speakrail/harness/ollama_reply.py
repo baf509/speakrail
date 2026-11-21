@@ -58,3 +58,43 @@ async def stream(http, url, model, messages, tools, max_tokens):
             if chunk.get("done"):
                 return
         raise RuntimeError("Ollama disconnected before finishing its reply")
+
+
+async def openai_stream(http, url, model, messages, tools, max_tokens, headers):
+    body = {"model": model, "messages": messages, "stream": True, "max_tokens": max_tokens,
+            "reasoning_effort": "none"}
+    if tools:
+        body["tools"] = tools
+    calls = {}
+    finished = False
+    async with http.post(url, json=body, headers=headers, allow_redirects=False) as response:
+        if response.status != 200:
+            raise RuntimeError(f"Reply model HTTP {response.status}: {(await response.text())[:300]}")
+        async for line in response.content:
+            if not line.startswith(b"data:"):
+                continue
+            data = line[5:].strip()
+            if data == b"[DONE]":
+                finished = True
+                break
+            chunk = json.loads(data)
+            if chunk.get("error"):
+                raise RuntimeError(f"Reply model: {chunk['error']}")
+            for choice in chunk.get("choices") or []:
+                delta = choice.get("delta") or {}
+                if text := delta.get("content"):
+                    yield {"message": {"content": text}}
+                for tool in delta.get("tool_calls") or []:
+                    call = calls.setdefault(tool["index"], {"id": "", "type": "function",
+                                                           "function": {"name": "", "arguments": ""}})
+                    if tool.get("id"):
+                        call["id"] = tool["id"]
+                    for field in ("name", "arguments"):
+                        call["function"][field] += (tool.get("function") or {}).get(field) or ""
+                finished |= bool(choice.get("finish_reason"))
+            if usage := chunk.get("usage"):
+                yield {"eval_count": usage.get("completion_tokens")}
+        if not finished:
+            raise RuntimeError("Reply model disconnected before finishing its reply")
+        if calls:
+            yield {"message": {"tool_calls": [calls[index] for index in sorted(calls)]}}

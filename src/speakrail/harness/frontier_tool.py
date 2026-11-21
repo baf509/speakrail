@@ -15,7 +15,7 @@ import time
 
 import aiohttp
 
-from ..config import secret
+from ..config import CFG, secret
 
 FRONTIER_TOOL = "ask_frontier"
 ENDPOINT = "https://api.fireworks.ai/inference/v1/chat/completions"
@@ -32,15 +32,15 @@ SYS = ("You are the expert behind a voice assistant. It hands you hard questions
 MAX_ANSWER_CHARS = 1500
 
 
-def _key():
-    return secret("FIREWORKS_API_KEY")
+def frontier_key():
+    return secret("FRONTIER_API_KEY") if CFG.frontier_url else secret("FIREWORKS_API_KEY")
 
 
 class FrontierTasks:
     """background ask_frontier calls of one live session; on_done(task_id, result) is called on the event loop"""
 
     def __init__(self, on_done, log_dir=None, model=MODEL):
-        self.on_done, self.log_dir, self.model = on_done, log_dir, model
+        self.on_done, self.log_dir, self.model = on_done, log_dir, CFG.frontier_model or model
         self.tasks: dict[str, dict] = {}
         self.n = 0
 
@@ -60,16 +60,19 @@ class FrontierTasks:
         body = {"model": self.model, "messages": [{"role": "system", "content": SYS}, {"role": "user", "content": user}],
                 "max_tokens": MAX_TOKENS[depth], "temperature": 0.6, "top_p": 0.95, "reasoning_effort": EFFORT[depth]}
         rec = {"task_id": tid, "question": t["question"], "depth": depth, "model": self.model, "t_start": time.time()}
+        headers = {"Authorization": f"Bearer {frontier_key()}"}
+        if CFG.frontier_caller:
+            headers["X-ARIA-Caller"] = CFG.frontier_caller
         try:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=TIMEOUT_S[depth])) as http:
                 for attempt in range(3):
-                    async with http.post(ENDPOINT, json=body, headers={"Authorization": f"Bearer {_key()}"}) as r:
+                    async with http.post(CFG.frontier_url or ENDPOINT, json=body, headers=headers) as r:
                         txt = await r.text()
                         if r.status == 200: break
                         if r.status == 400 and "reasoning" in txt.lower() and "reasoning_effort" in body:
                             body.pop("reasoning_effort"); continue            # a model without the knob
                         if r.status not in (429, 500, 502, 503, 504) or attempt == 2:
-                            raise RuntimeError(f"fireworks {r.status}: {txt[:200]}")
+                            raise RuntimeError(f"Frontier model HTTP {r.status}: {txt[:200]}")
                     await asyncio.sleep(3 * (attempt + 1))
             d = json.loads(txt); msg = d["choices"][0]["message"]; u = d.get("usage") or {}
             text = (msg.get("content") or "").strip()
@@ -77,7 +80,7 @@ class FrontierTasks:
             conf = m.group(1).lower() if m else None
             if m: text = text[:m.start()].strip()
             rec.update(prompt_tokens=u.get("prompt_tokens"), completion_tokens=u.get("completion_tokens"),
-                       usd=round(((u.get("prompt_tokens") or 0) * PRICE_IN + (u.get("completion_tokens") or 0) * PRICE_OUT) / 1e6, 5),
+                       usd=0.0 if CFG.frontier_url else round(((u.get("prompt_tokens") or 0) * PRICE_IN + (u.get("completion_tokens") or 0) * PRICE_OUT) / 1e6, 5),
                        finish=d["choices"][0].get("finish_reason"))
             result = ({"task_id": tid, "answer": text[:MAX_ANSWER_CHARS], **({"confidence": conf} if conf else {})} if text
                       else {"task_id": tid, "error": "no answer (" + str(d["choices"][0].get("finish_reason")) + ")"})

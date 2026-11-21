@@ -61,6 +61,7 @@ def micro_cfg(q, cfg):
                     tau=CFG.turn_tau, k=CFG.turn_k, bias=CFG.decision_biases,
                     reply_temp=CFG.reply_temp, reply_top_p=CFG.reply_top_p, reply_top_k=CFG.reply_top_k,
                     reply_model=CFG.reply_model, ollama_url=CFG.ollama_url,
+                    reply_chat_url=CFG.reply_chat_url, reply_caller=CFG.reply_caller,
                     think_model=CFG.llm_base_model, undo_words=ARGS.undo_words, tool_hold_ms=CFG.tool_hold_ms,
                     persona=ARGS.persona,
                     allow_interject=not ARGS.no_interject, silence_fallback_ms=cfg.silence_ms,
@@ -225,7 +226,13 @@ async def on_startup(app):
     print(f"speakrail{' (stub mode, no models)' if ARGS.stub else ''}: open http://{ARGS.host}:{ARGS.port}/", flush=True)
 
 
+async def health(_request):
+    return web.json_response({"status": "ok", "model": CFG.health_identity})
+
+
 def main():
+    from .frontier_tool import frontier_key
+
     global ARGS, GATE
     ap = argparse.ArgumentParser()
     ap.add_argument("--stub", action="store_true", help="no models: fake ASR / turn head / LLM / TTS, to try the UI")
@@ -256,7 +263,7 @@ def main():
     # tools
     ap.add_argument("--search", default=CFG.search, choices=["searxng", "serper", "brave", "off"],
                     help="web search backend for the web_search tool (off by default)")
-    ap.add_argument("--frontier", action="store_true", default=bool(secret("FIREWORKS_API_KEY")),
+    ap.add_argument("--frontier", action="store_true", default=bool(frontier_key()),
                     help="offer ask_frontier (a larger model on Fireworks, paid; on when FIREWORKS_API_KEY is set)")
     ap.add_argument("--claude", action="store_true", help="offer claude_code (Claude Code on this machine: a shell!) to sessions "
                     "whose page URL carries ?ck=<SPEAKRAIL_ACCESS_KEY>")
@@ -275,6 +282,8 @@ def main():
     app.router.add_get("/v1/live/sessions", live_handler(make_live_session, GATE))
     add_control_routes(app, GATE, "")
     add_control_routes(app, GATE, "/live")                # for reverse proxies that mount the UI there
+    if CFG.health_identity:
+        app.router.add_get("/health", health)
     app.router.add_get("/", page("live/index.html"))
     app.router.add_get("/ws", ws_handler)
     app.router.add_static("/static", os.path.join(HERE, "web", "live"))

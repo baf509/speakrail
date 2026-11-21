@@ -655,18 +655,35 @@ async def scenario_ant4_old_head():
     return "ANT4 on with a 5-class head: unchanged", ok and d.s.counters["early_fired"] == 0, d
 
 
-async def scenario_ollama_reply():
+async def scenario_ollama_reply(openai=False):
     requests = []
     disconnected = asyncio.Event()
 
     async def chat(request):
         body = await request.json()
         requests.append(body)
-        resp = web.StreamResponse(headers={"Content-Type": "application/x-ndjson"})
+        resp = web.StreamResponse(headers={"Content-Type": "text/event-stream" if openai else "application/x-ndjson"})
         await resp.prepare(request)
 
         async def send(**chunk):
-            await resp.write((json.dumps(chunk) + "\n").encode())
+            if openai:
+                message = chunk.get("message", {})
+                calls = message.get("tool_calls")
+                if calls:
+                    call = calls[0]["function"]
+                    for fragment in ({"index": 0, "id": "roll", "function": {"name": call["name"], "arguments": '{"expr":'}},
+                                     {"index": 0, "function": {"arguments": '"2d6"}'}}):
+                        delta = {"tool_calls": [fragment]}
+                        await resp.write(("data: " + json.dumps({"choices": [{"delta": delta}]}) + "\n\n").encode())
+                    return
+                delta = {k: v for k, v in message.items() if k != "thinking"}
+                if "thinking" in message:
+                    delta["reasoning_content"] = message["thinking"]
+                await resp.write(("data: " + json.dumps({"choices": [{"delta": delta}]}) + "\n\n").encode())
+                if chunk.get("done"):
+                    await resp.write(b"data: [DONE]\n\n")
+            else:
+                await resp.write((json.dumps(chunk) + "\n").encode())
 
         last = body["messages"][-1]
         if last["role"] == "tool":
@@ -688,14 +705,17 @@ async def scenario_ollama_reply():
         return resp
 
     app = web.Application()
-    app.router.add_post("/api/chat", chat)
+    path = "/v1/chat/completions" if openai else "/api/chat"
+    app.router.add_post(path, chat)
     runner = web.AppRunner(app)
     await runner.setup()
     try:
         site = web.TCPSite(runner, "127.0.0.1", 0)
         await site.start()
         host, port = runner.addresses[0]
-        d = Driver(reply_model="inkling-2-mini", ollama_url=f"http://{host}:{port}", phrase_cache=False)
+        url = f"http://{host}:{port}"
+        d = Driver(reply_model="inkling-2-mini", ollama_url=url, phrase_cache=False,
+                   reply_chat_url=url + path if openai else "")
         await d.start()
         try:
             await turn(d, "Roll", "two", peek_tail=("dice.",))
@@ -706,9 +726,11 @@ async def scenario_ollama_reply():
             d.words("Wait,", "stop.")
             await d.frames(3, SPEAK)
             await asyncio.wait_for(disconnected.wait(), timeout=1)
-            assert all(b["model"] == "inkling-2-mini" and b["stream"] and b["think"] is False for b in requests)
+            setting, value = ("reasoning_effort", "none") if openai else ("think", False)
+            assert all(b["model"] == "inkling-2-mini" and b["stream"] and b[setting] == value for b in requests)
             assert requests[0]["messages"][-1] == {"role": "user", "content": "Roll two dice."}
-            assert requests[1]["messages"][-1]["tool_name"] == "dice_roll"
+            field, value = ("tool_call_id", "roll") if openai else ("tool_name", "dice_roll")
+            assert requests[1]["messages"][-1][field] == value
             assert any(m["role"] == "assistant" and "I rolled the dice." in m["content"]
                        for m in requests[2]["messages"])
             assert ("complete (spec)", "speak") in d.decisions()
@@ -722,7 +744,8 @@ async def scenario_ollama_reply():
             await d.s.http.close()
     finally:
         await runner.cleanup()
-    return "Inkling streams a reply, uses a tool and cancels on barge-in", True, d
+    backend = "OpenAI-compatible" if openai else "Ollama"
+    return f"Inkling via {backend} streams a reply, uses a tool and cancels on barge-in", True, d
 
 
 async def main():
@@ -733,7 +756,7 @@ async def main():
                scenario_interrupt_stale, scenario_interrupt_hold, scenario_no_empty_pin,
                scenario_spec_live_duplicate, scenario_silence_fallback, scenario_phrase_cache, scenario_safety_net, scenario_reset, scenario_peek_twice, scenario_bc_flood, scenario_claude, scenario_frontier, scenario_spec_parallel_listen, scenario_nudge_after_listen, scenario_nudge_already_mentioned, scenario_peek_respelled,
                scenario_ant4_confirmed, scenario_ant4_replaced, scenario_ant4_confirm_skipped,
-               scenario_ant4_old_head, scenario_ollama_reply):
+               scenario_ant4_old_head, scenario_ollama_reply, lambda: scenario_ollama_reply(openai=True)):
         name, ok, d = await sc()
         results.append((name, ok))
         print(f"\n=== {name}: {'PASS' if ok else 'FAIL'}")
