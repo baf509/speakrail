@@ -28,7 +28,7 @@ from typing import Awaitable, Callable
 
 from aiohttp import WSMsgType, web
 
-from ..config import secret
+from ..config import CFG, secret
 from .audio import Downsampler, Pacer
 
 CLIENT_TOOL_TIMEOUT_S = 60.0
@@ -59,11 +59,15 @@ async def claim(owner) -> bool:
 
 
 def origin_allowed(request) -> bool:
-    """any web page can open a WebSocket to localhost, so a browser's Origin has to be this server's own"""
+    """any web page can open a WebSocket to localhost, so a browser's Origin has to be this server's own,
+    or one named in ALLOWED_ORIGINS (an app on this machine that hosts the voice page itself)"""
     origin = request.headers.get("Origin")
     if origin is None:                                 # not a browser
         return True
-    return origin.split("://", 1)[-1].rstrip("/") == request.host
+    if origin.split("://", 1)[-1].rstrip("/") == request.host:
+        return True
+    extra = {o.strip().rstrip("/").lower() for o in CFG.allowed_origins.split(",") if o.strip()}
+    return origin.rstrip("/").lower() in extra
 
 
 def token_ok(request) -> bool:

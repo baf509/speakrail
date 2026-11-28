@@ -18,7 +18,7 @@ def test_defaults_match_the_old_code():
                     frontier_url="", frontier_model="", frontier_caller="",
                     llm_base_model="speakrail-base", tts_engine="breeze", tts_url="", tts_model="pocket-tts", breeze_int8="backbone,text_encoder,depth",
                     home=str(Path.home() / ".speakrail"), models_dir="", engines_path="", tokenizer_dir=str(ROOT / "models/speakrail-gemma/tokenizer"), phrase_cache_dir=str(ROOT / "run/phrase_cache"), sessions_dir="",
-                    ui_host="127.0.0.1", ui_port=8080, idle_offload_min=-1.0, host_url="", no_color=False, persona="nova", voice="", home_city="London", home_timezone="Europe/London",
+                    ui_host="127.0.0.1", ui_port=8080, allowed_origins="", idle_offload_min=-1.0, host_url="", no_color=False, persona="nova", voice="", home_city="London", home_timezone="Europe/London",
                     silence_ms=1000, turn_tau=0.9, turn_k=3, spec=True, peek=True, peek_frames=0, ant4="", ant4_age_s=0.5, ant4_confirm_skip=True,
                     decision_bias="", reply_temp=0.0, reply_top_p=1.0, reply_top_k=0,
                     notes=True, interject=True, tool_hold_ms=300, search="off", searxng_url="http://127.0.0.1:8888/search", update_check=True)

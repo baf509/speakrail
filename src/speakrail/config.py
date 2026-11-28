@@ -44,6 +44,9 @@ class Config:
     # web UI
     ui_host: str = "127.0.0.1"
     ui_port: int = 8080
+    # other browser origins whose pages may open a session here (comma-separated, e.g. "http://localhost:3000"),
+    # for a page served by another app on this machine; "" = this server's own page only
+    allowed_origins: str = ""
     # engines unload after this long with no session; -1 = the platform's default, 0 = never
     idle_offload_min: float = -1.0
     host_url: str = ""               # the host's control port; set by `speakrail run` for the harness it starts
@@ -107,7 +110,7 @@ ENV = {
     "tts_engine": ("TTS_ENGINE", str), "tts_url": ("TTS_URL", str), "tts_model": ("TTS_MODEL", str), "breeze_int8": ("BREEZE_INT8", str),
     "home": ("SPEAKRAIL_HOME", str), "models_dir": ("MODELS_DIR", str), "engines_path": ("SPEAKRAIL_ENGINES_PATH", str),
     "tokenizer_dir": ("SPEAKRAIL_TOKENIZER_DIR", str), "phrase_cache_dir": ("PHRASE_CACHE_DIR", str), "sessions_dir": ("SESSIONS_DIR", str),
-    "ui_host": ("UI_HOST", str), "ui_port": ("UI_PORT", int), "idle_offload_min": ("IDLE_OFFLOAD_MIN", float), "host_url": ("SPEAKRAIL_HOST_URL", str), "no_color": ("NO_COLOR", bool),
+    "ui_host": ("UI_HOST", str), "ui_port": ("UI_PORT", int), "allowed_origins": ("SPEAKRAIL_ALLOWED_ORIGINS", str), "idle_offload_min": ("IDLE_OFFLOAD_MIN", float), "host_url": ("SPEAKRAIL_HOST_URL", str), "no_color": ("NO_COLOR", bool),
     "persona": ("PERSONA", str), "voice": ("VOICE", str), "home_city": ("HOME_CITY", str), "home_timezone": ("HOME_TIMEZONE", str),
     "silence_ms": ("SILENCE_MS", int), "turn_tau": ("TURN_TAU", float), "spec": ("SPEC", _on_if_1),
     "peek": ("PEEK", _off_if_0), "ant4": ("ANT4", str), "ant4_age_s": ("ANT4_AGE_S", float), "ant4_confirm_skip": ("ANT4_CONFIRM_SKIP", _on_if_1),
