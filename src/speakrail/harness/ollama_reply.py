@@ -5,8 +5,17 @@ import json
 from . import protocol as P
 
 
+DATE_PREFIX = "Current date and time:"
+
+
 def messages(ctx: P.Context, system: str) -> list[dict]:
-    result = [{"role": "system", "content": system + "\n"
+    # The system prompt ends with the session's date line (protocol.date_line). NInfer reuses a cached
+    # prompt only at message boundaries, so a date inside the system message made every new session
+    # re-read ~2,000 tokens; carried in the first user message instead, the system message (and the
+    # tool declarations) stay byte-identical across sessions (2026-11-28: 1,571 of 1,608 reused).
+    lines = system.rstrip("\n").split("\n")
+    date = lines.pop() if lines and lines[-1].startswith(DATE_PREFIX) else ""
+    result = [{"role": "system", "content": "\n".join(lines) + "\n"
                "Speakrail handles turn-taking. When called, respond now in plain spoken language. "
                "Bracketed tool results in the transcript are background context."}]
     role = "user"
@@ -39,6 +48,9 @@ def messages(ctx: P.Context, system: str) -> list[dict]:
     finish()
     if result[-1]["role"] != "user":
         result.append({"role": "user", "content": "Continue the conversation."})
+    if date:
+        first = next(m for m in result if m["role"] == "user")
+        first["content"] = f"[{date}]\n" + first["content"]
     return result
 
 
