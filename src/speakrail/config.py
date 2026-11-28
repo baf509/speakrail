@@ -26,6 +26,10 @@ class Config:
     ollama_url: str = "http://127.0.0.1:11434"
     reply_chat_url: str = ""  # full OpenAI-compatible chat completions URL
     reply_caller: str = ""   # caller name when using the ARIA gateway
+    # thinking_budget sent with OpenAI-compatible replies (a NInfer extension; 0 = not sent). Inkling 2
+    # always opens a thinking block, even at reasoning_effort none; a budget of 1 closes it at once:
+    # first spoken word ~0.57 s instead of ~1.0 s, 1.1 s instead of 3.5 s on a sum (2026-11-28).
+    reply_thinking_budget: int = 0
     health_identity: str = ""
     frontier_url: str = ""
     frontier_model: str = ""
@@ -103,7 +107,7 @@ TUNED = {"turn_k", "peek_frames", "tool_hold_ms", "decision_bias", "reply_temp",
 ENV = {
     "asr_url": ("ASR_URL", str), "llm_url": ("LLM_URL", str), "llm_lora": ("LLM_LORA", str), "llm_base_model": ("LLM_BASE_MODEL", str),
     "reply_model": ("REPLY_MODEL", str), "ollama_url": ("OLLAMA_URL", str),
-    "reply_chat_url": ("REPLY_CHAT_URL", str), "reply_caller": ("REPLY_CALLER", str),
+    "reply_chat_url": ("REPLY_CHAT_URL", str), "reply_caller": ("REPLY_CALLER", str), "reply_thinking_budget": ("REPLY_THINKING_BUDGET", int),
     "health_identity": ("ARIA_IDENTITY", str),
     "frontier_url": ("FRONTIER_URL", str), "frontier_model": ("FRONTIER_MODEL", str),
     "frontier_caller": ("FRONTIER_CALLER", str),

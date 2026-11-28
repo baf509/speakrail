@@ -1194,7 +1194,8 @@ class MicroSession(Session):
                 if self.m.reply_caller:
                     headers["X-ARIA-Caller"] = self.m.reply_caller
                 chunks = ollama_reply.openai_stream(self.http, self.m.reply_chat_url, self.m.reply_model,
-                                                   messages, tools, self.m.reply_max_tokens, headers)
+                                                   messages, tools, self.m.reply_max_tokens, headers,
+                                                   thinking_budget=CFG.reply_thinking_budget)
             else:
                 chunks = ollama_reply.stream(self.http, self.m.ollama_url, self.m.reply_model, messages, tools,
                                             self.m.reply_max_tokens)

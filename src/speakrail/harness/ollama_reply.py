@@ -60,9 +60,11 @@ async def stream(http, url, model, messages, tools, max_tokens):
         raise RuntimeError("Ollama disconnected before finishing its reply")
 
 
-async def openai_stream(http, url, model, messages, tools, max_tokens, headers):
+async def openai_stream(http, url, model, messages, tools, max_tokens, headers, thinking_budget=0):
     body = {"model": model, "messages": messages, "stream": True, "max_tokens": max_tokens,
             "reasoning_effort": "none"}
+    if thinking_budget > 0:
+        body["thinking_budget"] = thinking_budget      # NInfer: caps the thinking block it would open anyway
     if tools:
         body["tools"] = tools
     calls = {}
